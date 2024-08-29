@@ -1,71 +1,130 @@
-import random
 import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image, ImageDraw
+import random
+
+class Brush:
+    def __init__(self, image_size):
+        self.x = random.randint(0, image_size[0])
+        self.y = random.randint(0, image_size[1])
+        self.size = random.randint(1, 10)
+        self.color = random.randint(0, 255)
+        self.rotation = random.uniform(0, 360)
+
+    def mutate(self):
+        self.x += random.randint(-5, 5)
+        self.y += random.randint(-5, 5)
+        self.size += random.randint(-2, 2)
+        self.color += random.randint(-10, 10)
+        self.rotation += random.uniform(-15, 15)
+        self.size = max(1, min(self.size, 10))
+        self.color = max(0, min(self.color, 255))
 
 class Individual:
-    def __init__(self, chromosome_length):
-        self.chromosome = np.random.randint(2, size=chromosome_length)
+    def __init__(self, image_size, num_brushes):
+        self.image_size = image_size
+        self.brushes = [Brush(image_size) for _ in range(num_brushes)]
         self.fitness = 0
 
-    def calculate_fitness(self, fitness_function):
-        self.fitness = fitness_function(self.chromosome)
+    def generate_image(self):
+        image = Image.new('L', self.image_size, color=255)
+        draw = ImageDraw.Draw(image)
+        for brush in self.brushes:
+            x1, y1 = brush.x - brush.size, brush.y - brush.size
+            x2, y2 = brush.x + brush.size, brush.y + brush.size
+            draw.ellipse([x1, y1, x2, y2], fill=brush.color)
+        return np.array(image)
 
-    def mutate(self, mutation_rate):
-        for i in range(len(self.chromosome)):
-            if random.random() < mutation_rate:
-                self.chromosome[i] = 1 if self.chromosome[i] == 0 else 0
+class Population:
+    def __init__(self, size, image_size, target_image, num_brushes):
+        self.size = size
+        self.image_size = image_size
+        self.target_image = target_image
+        self.num_brushes = num_brushes
+        self.individuals = [Individual(image_size, num_brushes) for _ in range(size)]
 
-    def crossover(parent1, parent2):
-        return parent1, parent2
+    def fitness_function(self, individual):
+        img = individual.generate_image()
+        difference = np.abs(img - self.target_image)
+        return 1 / (np.mean(difference) + 1)
 
-
-class Population(Individual):
-    def __init__(self, population_size, chromosome_length, mutation_rate=0.01):
-        self.individuals = [Individual(chromosome_length) for _ in range(population_size)]
-        self.mutation_rate = mutation_rate
-
-    def check_fitness(self):
+    def evaluate_fitness(self):
         for individual in self.individuals:
-            individual.calculate_fitness(self.fitness_function)
+            individual.fitness = self.fitness_function(individual)
 
-    def get_parent(self):
-        total_fitness = sum(individual.fitness for individual in self.individuals)
-        probabilities = [individual.fitness / total_fitness for individual in self.individuals]
-        return self.individuals[np.random.choice(len(self.individuals), p=probabilities)]
+    def select_parents(self):
+        self.individuals.sort(key=lambda x: x.fitness, reverse=True)
+        return self.individuals[:self.size // 2]
+
+    def crossover(self, parent1, parent2):
+        child = Individual(self.image_size, self.num_brushes)
+        split = random.randint(0, self.num_brushes)
+        child.brushes = parent1.brushes[:split] + parent2.brushes[split:]
+        return child
+
+    def mutate(self, individual):
+        for brush in individual.brushes:
+            if random.random() < 0.1:  # 10% chance of mutation
+                brush.mutate()
 
     def next_generation(self):
-        new_population = []
-        self.check_fitness()
+        self.evaluate_fitness()
+        parents = self.select_parents()
+        next_gen = parents.copy()
+        
+        while len(next_gen) < self.size:
+            parent1, parent2 = random.sample(parents, 2)
+            child = self.crossover(parent1, parent2)
+            self.mutate(child)
+            next_gen.append(child)
+        
+        self.individuals = next_gen
 
-        for _ in range(len(self.individuals) // 2):
-            parent1 = self.get_parent()
-            parent2 = self.get_parent()
+def run_genetic_algorithm(target_image_path, population_size, num_generations, num_brushes):
+    target_image = np.array(Image.open(target_image_path).convert('L').resize((50, 50)))
+    image_size = target_image.shape
+    
+    population = Population(population_size, image_size, target_image, num_brushes)
+    
+    best_fitnesses = []
+    avg_fitnesses = []
+    
+    for generation in range(num_generations):
+        population.next_generation()
+        fitnesses = [ind.fitness for ind in population.individuals]
+        best_fitness = max(fitnesses)
+        avg_fitness = sum(fitnesses) / len(fitnesses)
+        
+        best_fitnesses.append(best_fitness)
+        avg_fitnesses.append(avg_fitness)
+        
+        if generation % 10 == 0:
+            print(f"Generation {generation}: Best Fitness = {best_fitness:.4f}, Avg Fitness = {avg_fitness:.4f}")
+            best_individual = max(population.individuals, key=lambda x: x.fitness)
+            best_image = best_individual.generate_image()
+            plt.imshow(best_image, cmap='gray')
+            plt.title(f"Generation {generation}")
+            plt.axis('off')
+            plt.show()
+    
+    plt.figure(figsize=(10, 5))
+    plt.plot(best_fitnesses, label='Best Fitness')
+    plt.plot(avg_fitnesses, label='Average Fitness')
+    plt.xlabel('Generation')
+    plt.ylabel('Fitness')
+    plt.title('Fitness Evolution')
+    plt.legend()
+    plt.show()
 
-            child1, child2 = self.crossover(parent1, parent2)
+    return population.individuals[0]
 
-            child1.mutate(self.mutation_rate)
-            child2.mutate(self.mutation_rate)
+# Ejemplo de uso
+target_image_path = 'target_image.png'  # Reemplaza con la ruta de tu imagen objetivo
+best_individual = run_genetic_algorithm(target_image_path, population_size=50, num_generations=1000, num_brushes=100)
 
-            new_population.extend([child1, child2])
-
-        self.individuals = new_population
-
-    def get_best_fitness(self):
-        return max(self.individuals, key=lambda indiv: indiv.fitness)
-
-# Algorithm Params
-population_size = 100
-generations = 1000
-chromosome_length = 10
-mutation_rate = 0.01
-best_individual = None
-
-# Init population object
-population = Population(population_size, chromosome_length, mutation_rate)
-
-# Ejecutar el algoritmo genético
-for gen in range(generations):
-    population.next_generation()
-    best_individual = population.get_best_fitness()
-    print(f"Generación {gen + 1}: Mejor fitness = {best_individual.fitness}")
-
-print(f"La mejor solución encontrada es: {best_individual.chromosome}")
+# Mostrar la mejor imagen generada
+best_image = best_individual.generate_image()
+plt.imshow(best_image, cmap='gray')
+plt.title("Best Generated Image")
+plt.axis('off')
+plt.show()
